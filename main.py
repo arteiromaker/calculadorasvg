@@ -105,7 +105,7 @@ def process_svg_by_color(svg_url: str):
     return perimetros_por_cor
 
 def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: str, perimetro_mm: float, tempo_minutos: float):
-    """Envia requisição POST para a API do AppSheet para atualizar a linha"""
+    """Envia requisição POST para a API do AppSheet para atualizar a linha do ID 70"""
     url = f"https://api.appsheet.com/api/v2/apps/{app_id}/tables/{table_name}/Action"
     
     headers = {
@@ -113,6 +113,12 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
         "Content-Type": "application/json"
     }
     
+    # Converte o ID para Inteiro (garante que 70 seja enviado como número)
+    try:
+        formatted_row_id = int(row_id)
+    except ValueError:
+        formatted_row_id = str(row_id)
+
     payload = {
         "Action": "Edit",
         "Properties": {
@@ -121,16 +127,16 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
         },
         "Rows": [
             {
-                "ID": row_id,  # Certifique-se de que a coluna de chave primária se chama ID na sua tabela
-                "Tempo_Corte_Minutos": tempo_minutos,
-                "Perimetro_Total_MM": perimetro_mm
+                "ID": formatted_row_id,
+                "Tempo_Corte_Minutos": float(tempo_minutos),
+                "Perimetro_Total_MM": float(perimetro_mm)
             }
         ]
     }
     
     response = requests.post(url, json=payload, headers=headers)
-    if response.status_code not in [200, 201]:
-        print(f"Erro ao atualizar AppSheet: {response.text}")
+    print(f"Status AppSheet Update: {response.status_code}")
+    print(f"Resposta AppSheet: {response.text}")
 
 @app.get("/")
 def health_check():
