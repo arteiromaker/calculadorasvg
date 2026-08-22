@@ -7,42 +7,35 @@ import re
 from typing import Dict, Optional
 from svgpathtools import svg2paths
 
-app = FastAPI(title="Calculador de SVG para Laser por Cores")
+app = FastAPI(title="Calculador de SVG para Laser por Cores + AppSheet Integration")
 
 class ColorSpeed(BaseModel):
-    # Dicionário de cores em Hex (ex: "#000000", "#FF0000") e suas velocidades em mm/s
-    # Exemplo: {"#000000": 20.0, "#FF0000": 100.0}
+    file_url: str
+    row_id: str                          # ID/Key do registro na tabela do AppSheet
+    app_id: str                          # App ID do AppSheet
+    access_key: str                      # Application Access Key do AppSheet
+    table_name: str = "Formação Preço"   # Nome da tabela no AppSheet
     velocidades_por_cor: Dict[str, float]
     velocidade_padrao_mms: float = 20.0
-    file_url: str
 
 def normalize_color(color_str: Optional[str]) -> Optional[str]:
-    """Normaliza cores hexadecimais (ex: #f00 -> #FF0000, red -> #FF0000, #ff0000 -> #FF0000)"""
     if not color_str or color_str.lower() in ['none', 'transparent']:
         return None
     
     color_str = color_str.strip().upper()
-    
-    # Mapeamento simples de cores primárias comuns
     color_map = {
-        'BLACK': '#000000',
-        'RED': '#FF0000',
-        'BLUE': '#0000FF',
-        'GREEN': '#008000',
-        'YELLOW': '#FFFF00',
-        'CYAN': '#00FFFF',
-        'MAGENTA': '#FF00FF'
+        'BLACK': '#000000', 'RED': '#FF0000', 'BLUE': '#0000FF',
+        'GREEN': '#008000', 'YELLOW': '#FFFF00', 'CYAN': '#00FFFF', 'MAGENTA': '#FF00FF'
     }
     
     if color_str in color_map:
         return color_map[color_str]
         
     if color_str.startswith('#'):
-        if len(color_str) == 4: # #F00 -> #FF0000
+        if len(color_str) == 4:
             return f"#{color_str[1]*2}{color_str[2]*2}{color_str[3]*2}"
         return color_str
         
-    # Busca por formato rgb(r,g,b)
     rgb_match = re.search(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', color_str.lower())
     if rgb_match:
         r, g, b = map(int, rgb_match.groups())
@@ -51,14 +44,11 @@ def normalize_color(color_str: Optional[str]) -> Optional[str]:
     return color_str
 
 def get_element_color(attr: dict) -> str:
-    """Extrai a cor principal da linha (stroke) ou preenchimento (fill) do elemento"""
-    # 1. Procura no stroke direto
     stroke = attr.get('stroke')
     if stroke and stroke.lower() != 'none':
         norm = normalize_color(stroke)
         if norm: return norm
         
-    # 2. Procura dentro do atributo style="stroke:#000000;..."
     style = attr.get('style', '')
     if style:
         stroke_match = re.search(r'stroke\s*:\s*([^;]+)', style)
@@ -66,13 +56,12 @@ def get_element_color(attr: dict) -> str:
             norm = normalize_color(stroke_match.group(1))
             if norm: return norm
             
-    # 3. Se não tiver stroke, tenta pelo fill
     fill = attr.get('fill')
     if fill and fill.lower() != 'none':
         norm = normalize_color(fill)
         if norm: return norm
         
-    return "#000000" # Se não definir cor, assume Preto (#000000)
+    return "#000000"
 
 def process_svg_by_color(svg_url: str):
     response = requests.get(svg_url)
@@ -87,8 +76,7 @@ def process_svg_by_color(svg_url: str):
 
     paths, attributes = svg2paths(temp_path)
     
-    # Fator de escala (px para mm)
-    scale_factor_mm = 0.26458333 # Padrão 96 DPI
+    scale_factor_mm = 0.26458333
     try:
         tree = ET.fromstring(svg_content)
         width_attr = tree.attrib.get('width', '')
@@ -100,7 +88,6 @@ def process_svg_by_color(svg_url: str):
     if os.path.exists(temp_path):
         os.remove(temp_path)
 
-    # Agrupa perímetros por cor Hex
     perimetros_por_cor: Dict[str, float] = {}
 
     for path, attr in zip(paths, attributes):
@@ -112,15 +99,42 @@ def process_svg_by_color(svg_url: str):
         else:
             perimetros_por_cor[cor] = comprimento_mm
 
-    # Arredonda perímetros
     for cor in perimetros_por_cor:
         perimetros_por_cor[cor] = round(perimetros_por_cor[cor], 2)
 
     return perimetros_por_cor
 
+def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: str, perimetro_mm: float, tempo_minutos: float):
+    """Envia requisição POST para a API do AppSheet para atualizar a linha"""
+    url = f"https://api.appsheet.com/api/v2/apps/{app_id}/tables/{table_name}/Action"
+    
+    headers = {
+        "ApplicationAccessKey": access_key,
+        "Content-Type": "application/json"
+    }
+    
+    payload = {
+        "Action": "Edit",
+        "Properties": {
+            "Locale": "pt-BR",
+            "Timezone": "E. South America Standard Time"
+        },
+        "Rows": [
+            {
+                "ID": row_id,  # Certifique-se de que a coluna de chave primária se chama ID na sua tabela
+                "Tempo_Corte_Minutos": tempo_minutos,
+                "Perimetro_Total_MM": perimetro_mm
+            }
+        ]
+    }
+    
+    response = requests.post(url, json=payload, headers=headers)
+    if response.status_code not in [200, 201]:
+        print(f"Erro ao atualizar AppSheet: {response.text}")
+
 @app.get("/")
 def health_check():
-    return {"status": "online", "message": "API de Cálculo de SVG com Suporte a Cores Operante!"}
+    return {"status": "online", "message": "API de Cálculo de SVG com Atualização do AppSheet Operante!"}
 
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
@@ -131,13 +145,10 @@ def calcular_corte(payload: ColorSpeed):
         tempo_total_segundos = 0.0
         perimetro_total_mm = 0.0
 
-        # Mapeamento de velocidades recebidas (converte todas as chaves de cor para maiúsculas)
         vel_map = {k.upper(): v for k, v in payload.velocidades_por_cor.items()}
 
         for cor, perimetro_mm in perimetros_por_cor.items():
-            # Pega a velocidade associada à cor, se não houver usa a velocidade padrão
             velocidade = vel_map.get(cor, payload.velocidade_padrao_mms)
-            
             tempo_seg = round(perimetro_mm / velocidade, 2)
             tempo_min = round(tempo_seg / 60.0, 2)
             
@@ -151,11 +162,24 @@ def calcular_corte(payload: ColorSpeed):
             tempo_total_segundos += tempo_seg
             perimetro_total_mm += perimetro_mm
 
+        perimetro_final = round(perimetro_total_mm, 2)
+        tempo_minutos_final = round(tempo_total_segundos / 60.0, 2)
+
+        # Atualiza o AppSheet via REST API
+        update_appsheet_row(
+            app_id=payload.app_id,
+            access_key=payload.access_key,
+            table_name=payload.table_name,
+            row_id=payload.row_id,
+            perimetro_mm=perimetro_final,
+            tempo_minutos=tempo_minutos_final
+        )
+
         return {
             "status": "success",
-            "perimetro_total_mm": round(perimetro_total_mm, 2),
+            "perimetro_total_mm": perimetro_final,
             "tempo_total_segundos": round(tempo_total_segundos, 2),
-            "tempo_total_minutos": round(tempo_total_segundos / 60.0, 2),
+            "tempo_total_minutos": tempo_minutos_final,
             "detalhes_por_cor": detalhes_por_cor
         }
 
