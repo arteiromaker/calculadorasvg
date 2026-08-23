@@ -1,9 +1,8 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
-import xml.etree.ElementTree as ET
-import os
 import re
+import os
 from typing import Dict, Optional
 from svgpathtools import svg2paths
 
@@ -76,37 +75,17 @@ def process_svg_by_color(svg_url: str):
 
     try:
         paths, attributes = svg2paths(temp_path)
-        
-        # 1. Tenta identificar a escala de conversão das coordenadas do SVG para Milímetros
-        scale_factor_mm = 0.001  # Fator de escala /1000 para coordenadas de arquivos AutoLaser/Corel
-        
-        try:
-            tree = ET.fromstring(svg_content)
-            width_str = tree.attrib.get('width', '')
-            viewbox_str = tree.attrib.get('viewBox', '')
-
-            if 'mm' in width_str.lower():
-                val = float(re.sub(r'[^0-9.]', '', width_str))
-                if viewbox_str:
-                    vb_parts = viewbox_str.replace(',', ' ').split()
-                    if len(vb_parts) == 4 and float(vb_parts[2]) > 0:
-                        scale_factor_mm = val / float(vb_parts[2])
-                else:
-                    scale_factor_mm = 1.0
-        except Exception:
-            pass
-
-        # 2. Converte o comprimento bruto de cada vetor para milímetros reais
         for path, attr in zip(paths, attributes):
             cor = get_element_color(attr)
             cor = cor.upper() if cor else "#000000"
 
             try:
-                comprimento_mm = path.length() * scale_factor_mm
+                # Comprimento dos vetores do arquivo
+                comprimento = path.length()
             except Exception:
-                comprimento_mm = 0.0
+                comprimento = 0.0
                 
-            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
+            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento
 
     except Exception as e:
         print(f"Erro no processamento SVG: {str(e)}")
@@ -153,21 +132,23 @@ def health_check():
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
     try:
-        perimetros_por_cor = process_svg_by_color(payload.file_url)
+        perimetros_brutos = process_svg_by_color(payload.file_url)
         tempo_total_segundos = 0.0
         perimetro_total_mm = 0.0
 
         vel_map = {k.upper(): v for k, v in payload.velocidades_por_cor.items()}
 
-        for cor, perimetro_mm in perimetros_por_cor.items():
+        for cor, perimetro_bruto in perimetros_brutos.items():
             velocidade = vel_map.get(cor, payload.velocidade_padrao_mms)
             if velocidade <= 0:
                 velocidade = payload.velocidade_padrao_mms
             
+            # Converte a escala das 3 casas decimais do AutoLaser (/ 1000.0)
+            perimetro_mm = perimetro_bruto / 1000.0
             perimetro_total_mm += perimetro_mm
 
             # Se for velocidade de gravação (>= 80 mm/s)
-            # Aplica a precisão de passo 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas/mm)
+            # Aplica o passo de 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas/mm)
             if velocidade >= 80.0:
                 passo_mm = 0.050
                 fator_linhas = 1.0 / passo_mm  # 20 passadas por mm
