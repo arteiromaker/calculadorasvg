@@ -80,12 +80,12 @@ def process_svg_by_color(svg_url: str):
             cor = cor.upper() if cor else "#000000"
 
             try:
-                # Converte as unidades brutas da arte para MM reais do AutoLaser
-                comprimento_mm = path.length() / 3686.2
+                # Retorna o comprimento 100% puro do vetor, sem nenhuma conversão
+                comprimento_puro = path.length()
             except Exception:
-                comprimento_mm = 0.0
+                comprimento_puro = 0.0
                 
-            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
+            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_puro
 
     except Exception as e:
         print(f"Erro no processamento SVG: {str(e)}")
@@ -132,32 +132,25 @@ def health_check():
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
     try:
-        perimetros_por_cor = process_svg_by_color(payload.file_url)
+        perimetros_puros = process_svg_by_color(payload.file_url)
         tempo_total_segundos = 0.0
-        perimetro_total_mm = 0.0
+        perimetro_total_puro = 0.0
 
         vel_map = {k.upper(): v for k, v in payload.velocidades_por_cor.items()}
 
-        for cor, perimetro_mm in perimetros_por_cor.items():
+        for cor, comprimento_puro in perimetros_puros.items():
             velocidade = vel_map.get(cor, payload.velocidade_padrao_mms)
             if velocidade <= 0:
                 velocidade = payload.velocidade_padrao_mms
             
-            perimetro_total_mm += perimetro_mm
-
-            # Se for cor de gravação (velocidade >= 80 mm/s)
-            # Aplica o passo de 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas/mm)
-            if velocidade >= 80.0:
-                passo_mm = 0.050
-                fator_linhas = 1.0 / passo_mm  # 20 passadas por mm
-                tempo_seg = (perimetro_mm * fator_linhas) / velocidade
-            else:
-                # Corte vetorial simples
-                tempo_seg = perimetro_mm / velocidade
-
+            # Soma pura sem alterações
+            perimetro_total_puro += comprimento_puro
+            
+            # Tempo puro em segundos (comprimento bruto / velocidade)
+            tempo_seg = comprimento_puro / velocidade
             tempo_total_segundos += tempo_seg
 
-        perimetro_final = round(perimetro_total_mm, 2)
+        perimetro_final = round(perimetro_total_puro, 2)
         tempo_minutos_final = round(tempo_total_segundos / 60.0, 2)
 
         update_appsheet_row(
@@ -171,8 +164,8 @@ def calcular_corte(payload: ColorSpeed):
 
         return {
             "status": "success",
-            "perimetro_total_mm": perimetro_final,
-            "tempo_total_minutos": tempo_minutos_final
+            "perimetro_total_puro": perimetro_final,
+            "tempo_total_minutos_puro": tempo_minutos_final
         }
 
     except Exception as e:
