@@ -23,7 +23,7 @@ def normalize_color(color_str: Optional[str]) -> Optional[str]:
         return None
     color_str = color_str.strip().upper()
     color_map = {
-        'BLACK': '#000000', 'RED': '#FF000D', 'BLUE': '#0000FF',
+        'BLACK': '#000000', 'RED': '#FF0000', 'BLUE': '#0000FF',
         'GREEN': '#008000', 'YELLOW': '#FFFF00', 'CYAN': '#00FFFF', 'MAGENTA': '#FF00FF'
     }
     if color_str in color_map:
@@ -55,6 +55,30 @@ def get_element_color(attr: dict) -> str:
         if norm: return norm
     return "#000000"
 
+def parse_dim_to_mm(dim_str: str) -> Optional[float]:
+    """Converte dimensões do SVG (ex: '100mm', '10cm', '3.93in', '100px') para MM"""
+    if not dim_str:
+        return None
+    dim_str = dim_str.strip().lower()
+    val_match = re.search(r'^([0-9.]+)', dim_str)
+    if not val_match:
+        return None
+    val = float(val_match.group(1))
+    
+    if 'mm' in dim_str:
+        return val
+    elif 'cm' in dim_str:
+        return val * 10.0
+    elif 'in' in dim_str:
+        return val * 25.4
+    elif 'pt' in dim_str:
+        return val * (25.4 / 72.0)
+    elif 'pc' in dim_str:
+        return val * (25.4 / 6.0)
+    elif 'px' in dim_str or dim_str.replace('.', '').isdigit():
+        return val * (25.4 / 96.0) # Padrão CSS/SVG 96 DPI
+    return val * (25.4 / 96.0)
+
 def process_svg_by_color(svg_url: str):
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
@@ -63,10 +87,10 @@ def process_svg_by_color(svg_url: str):
     try:
         response = requests.get(svg_url, headers=headers, timeout=15)
         if response.status_code != 200:
-            return {}, 0.0
+            return {}
         svg_content = response.content
     except Exception:
-        return {}, 0.0
+        return {}
 
     temp_path = "/tmp/temp_file.svg"
     with open(temp_path, "wb") as f:
@@ -77,33 +101,37 @@ def process_svg_by_color(svg_url: str):
     try:
         paths, attributes = svg2paths(temp_path)
         
-        # 1. Define escala padrão (96 DPI -> 1px = 0.26458333 mm)
-        scale_factor_mm = 0.26458333
+        # Fator de conversão inicial (padrão 96 DPI: 1px = 0.26458333mm)
+        scale_factor_mm = 25.4 / 96.0 
         
         try:
             tree = ET.fromstring(svg_content)
             width_str = tree.attrib.get('width', '')
+            height_str = tree.attrib.get('height', '')
             viewbox_str = tree.attrib.get('viewBox', '')
 
-            # Se o arquivo declara explicitamente mm no cabeçalho
-            if 'mm' in width_str.lower():
-                val = float(re.sub(r'[^0-9.]', '', width_str))
-                if viewbox_str:
-                    vb_parts = viewbox_str.replace(',', ' ').split()
-                    if len(vb_parts) == 4 and float(vb_parts[2]) > 0:
-                        scale_factor_mm = val / float(vb_parts[2])
-                else:
-                    scale_factor_mm = 1.0
-        except Exception:
-            pass
+            width_mm = parse_dim_to_mm(width_str)
+            height_mm = parse_dim_to_mm(height_str)
 
-        # 2. Soma os perímetros reais em MM
+            if viewbox_str:
+                vb_parts = viewbox_str.replace(',', ' ').split()
+                if len(vb_parts) == 4:
+                    vb_width_units = float(vb_parts[2])
+                    vb_height_units = float(vb_parts[3])
+
+                    if width_mm and vb_width_units > 0:
+                        scale_factor_mm = width_mm / vb_width_units
+                    elif height_mm and vb_height_units > 0:
+                        scale_factor_mm = height_mm / vb_height_units
+        except Exception as e_scale:
+            print(f"Erro ao identificar escala do SVG: {str(e_scale)}")
+
+        # Calcula o perímetro real de cada caminho aplicando a escala exata em MM
         for path, attr in zip(paths, attributes):
             cor = get_element_color(attr)
             cor = cor.upper() if cor else "#000000"
 
             try:
-                # Transforma as unidades brutas em MM reais
                 comprimento_mm = path.length() * scale_factor_mm
             except Exception:
                 comprimento_mm = 0.0
@@ -111,7 +139,7 @@ def process_svg_by_color(svg_url: str):
             perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
 
     except Exception as e:
-        print(f"Erro no processamento SVG: {str(e)}")
+        print(f"Aviso na leitura svgpathtools: {str(e)}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -120,7 +148,7 @@ def process_svg_by_color(svg_url: str):
         perimetros_por_cor[cor] = round(perimetros_por_cor[cor], 2)
 
     return perimetros_por_cor
-    
+
 def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: str, perimetro_mm: float, tempo_minutos: float):
     url = f"https://api.appsheet.com/api/v2/apps/{app_id}/tables/{table_name}/Action"
     headers = {
@@ -128,7 +156,6 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
         "Content-Type": "application/json"
     }
     
-    # Trata o row_id para número inteiro para casar com a coluna ID numórica no AppSheet
     try:
         formatted_row_id = int(row_id)
     except ValueError:
@@ -154,7 +181,6 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
     print(f"Resposta AppSheet: {res.text}")
 
 @app.get("/")
-
 def health_check():
     return {"status": "online", "message": "API Operante"}
 
