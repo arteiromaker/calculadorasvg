@@ -4,7 +4,7 @@ import requests
 import re
 import os
 from typing import Dict, Optional
-import svgelements as svg
+from svgpathtools import svg2paths
 
 app = FastAPI(title="Calculador de SVG para Laser por Cores + AppSheet Integration")
 
@@ -17,16 +17,41 @@ class ColorSpeed(BaseModel):
     velocidades_por_cor: Dict[str, float]
     velocidade_padrao_mms: float = 20.0
 
-def normalize_color(color_obj) -> str:
-    """Normaliza qualquer objeto de cor do svgelements para Hexadecimal (#RRGGBB)"""
-    if not color_obj or color_obj.value is None:
-        return "#000000"
-    
-    hex_str = str(color_obj.hex).upper()
-    if hex_str.startswith('#'):
-        if len(hex_str) == 4: # #RGB -> #RRGGBB
-            return f"#{hex_str[1]*2}{hex_str[2]*2}{hex_str[3]*2}"
-        return hex_str[:7] # Remove canal alpha se existir
+def normalize_color(color_str: Optional[str]) -> Optional[str]:
+    if not color_str or color_str.lower() in ['none', 'transparent']:
+        return None
+    color_str = color_str.strip().upper()
+    color_map = {
+        'BLACK': '#000000', 'RED': '#FF0000', 'BLUE': '#0000FF',
+        'GREEN': '#008000', 'YELLOW': '#FFFF00', 'CYAN': '#00FFFF', 'MAGENTA': '#FF00FF'
+    }
+    if color_str in color_map:
+        return color_map[color_str]
+    if color_str.startswith('#'):
+        if len(color_str) == 4:
+            return f"#{color_str[1]*2}{color_str[2]*2}{color_str[3]*2}"
+        return color_str
+    rgb_match = re.search(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', color_str.lower())
+    if rgb_match:
+        r, g, b = map(int, rgb_match.groups())
+        return f"#{r:02X}{g:02X}{b:02X}"
+    return color_str
+
+def get_element_color(attr: dict) -> str:
+    stroke = attr.get('stroke')
+    if stroke and stroke.lower() != 'none':
+        norm = normalize_color(stroke)
+        if norm: return norm
+    style = attr.get('style', '')
+    if style:
+        stroke_match = re.search(r'stroke\s*:\s*([^;]+)', style)
+        if stroke_match:
+            norm = normalize_color(stroke_match.group(1))
+            if norm: return norm
+    fill = attr.get('fill')
+    if fill and fill.lower() != 'none':
+        norm = normalize_color(fill)
+        if norm: return norm
     return "#000000"
 
 def process_svg_by_color(svg_url: str):
@@ -37,59 +62,38 @@ def process_svg_by_color(svg_url: str):
     try:
         response = requests.get(svg_url, headers=headers, timeout=15)
         if response.status_code != 200:
-            return {}, 0.0
+            return {}
         svg_content = response.content
-    except Exception as e:
-        print(f"Erro ao baixar SVG: {str(e)}")
-        return {}, 0.0
+    except Exception:
+        return {}
 
     temp_path = "/tmp/temp_file.svg"
     with open(temp_path, "wb") as f:
         f.write(svg_content)
 
     perimetros_por_cor: Dict[str, float] = {}
-    
+
     try:
-        # Carrega o SVG convertendo todas as matrizes e transformações para milímetros (ppi=96)
-        loaded_svg = svg.SVG.parse(temp_path, ppi=96.0)
-        
-        # 1. Bounding Box do desenho inteiro em Milímetros
-        bbox = loaded_svg.bbox()
-        area_cm2 = 0.0
-        if bbox:
-            # bbox = (xmin, ymin, xmax, ymax) em pixels (96 ppi)
-            width_mm = (bbox[2] - bbox[0]) * (25.4 / 96.0)
-            height_mm = (bbox[3] - bbox[1]) * (25.4 / 96.0)
-            area_cm2 = round((width_mm / 10.0) * (height_mm / 10.0), 2)
+        paths, attributes = svg2paths(temp_path)
+        for path, attr in zip(paths, attributes):
+            cor = get_element_color(attr)
+            cor = cor.upper() if cor else "#000000"
 
-        # 2. Varre os elementos aplicando as transformações e medindo as linhas em MM
-        for element in loaded_svg.elements():
-            if isinstance(element, svg.Shape):
-                # Extrai a cor da linha (stroke) ou preenchimento (fill)
-                cor = normalize_color(element.stroke)
-                if cor == "#000000" and element.fill and element.fill.value is not None:
-                    cor = normalize_color(element.fill)
-
-                try:
-                    # length() do svgelements em mm (1 px = 25.4/96 mm)
-                    length_px = element.length()
-                    length_mm = length_px * (25.4 / 96.0)
-                except Exception:
-                    length_mm = 0.0
-
-                perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + length_mm
+            try:
+                # Aplica a divisão por 1000 para ajustar à escala real em mm do AutoLaser
+                comprimento = path.length() / 1000.0
+            except Exception:
+                comprimento = 0.0
+                
+            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento
 
     except Exception as e:
-        print(f"Erro na leitura svgelements: {str(e)}")
-        area_cm2 = 0.0
+        print(f"Erro no processamento SVG: {str(e)}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-    for cor in perimetros_por_cor:
-        perimetros_por_cor[cor] = round(perimetros_por_cor[cor], 2)
-
-    return perimetros_por_cor, area_cm2
+    return perimetros_por_cor
 
 def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: str, perimetro_mm: float, tempo_minutos: float):
     url = f"https://api.appsheet.com/api/v2/apps/{app_id}/tables/{table_name}/Action"
@@ -120,7 +124,6 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
     
     res = requests.post(url, json=payload, headers=headers)
     print(f"Update AppSheet Status: {res.status_code}")
-    print(f"Resposta AppSheet: {res.text}")
 
 @app.get("/")
 def health_check():
@@ -129,7 +132,7 @@ def health_check():
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
     try:
-        perimetros_por_cor, area_cm2 = process_svg_by_color(payload.file_url)
+        perimetros_por_cor = process_svg_by_color(payload.file_url)
         tempo_total_segundos = 0.0
         perimetro_total_mm = 0.0
 
@@ -140,9 +143,19 @@ def calcular_corte(payload: ColorSpeed):
             if velocidade <= 0:
                 velocidade = payload.velocidade_padrao_mms
             
-            tempo_seg = perimetro_mm / velocidade
-            tempo_total_segundos += tempo_seg
             perimetro_total_mm += perimetro_mm
+
+            # Se a velocidade for de gravação (>= 80 mm/s)
+            # Aplica a precisão de passo 0.050 mm do AutoLaser (20 passadas/mm)
+            if velocidade >= 80.0:
+                passo_mm = 0.050
+                fator_linhas = 1.0 / passo_mm  # 20 passadas por mm
+                tempo_seg = (perimetro_mm * fator_linhas) / velocidade
+            else:
+                # Corte vetorial puro
+                tempo_seg = perimetro_mm / velocidade
+
+            tempo_total_segundos += tempo_seg
 
         perimetro_final = round(perimetro_total_mm, 2)
         tempo_minutos_final = round(tempo_total_segundos / 60.0, 2)
@@ -159,8 +172,7 @@ def calcular_corte(payload: ColorSpeed):
         return {
             "status": "success",
             "perimetro_total_mm": perimetro_final,
-            "tempo_total_minutos": tempo_minutos_final,
-            "area_cm2": area_cm2
+            "tempo_total_minutos": tempo_minutos_final
         }
 
     except Exception as e:
