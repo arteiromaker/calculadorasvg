@@ -75,19 +75,17 @@ def process_svg_by_color(svg_url: str):
 
     try:
         paths, attributes = svg2paths(temp_path)
-        # Fator de conversão real: 1 px de SVG (96 DPI) = 0.26458333 mm
-        scale_factor_mm = 0.26458333
-
         for path, attr in zip(paths, attributes):
             cor = get_element_color(attr)
             cor = cor.upper() if cor else "#000000"
 
             try:
-                comprimento_mm = path.length() * scale_factor_mm
+                # Comprimento em unidades brutas
+                comprimento = path.length()
             except Exception:
-                comprimento_mm = 0.0
+                comprimento = 0.0
                 
-            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
+            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento
 
     except Exception as e:
         print(f"Erro no processamento SVG: {str(e)}")
@@ -134,25 +132,30 @@ def health_check():
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
     try:
-        perimetros_por_cor = process_svg_by_color(payload.file_url)
+        perimetros_brutos = process_svg_by_color(payload.file_url)
         tempo_total_segundos = 0.0
         perimetro_total_mm = 0.0
 
         vel_map = {k.upper(): v for k, v in payload.velocidades_por_cor.items()}
 
-        for cor, perimetro_mm in perimetros_por_cor.items():
+        for cor, perimetro_bruto in perimetros_brutos.items():
             velocidade = vel_map.get(cor, payload.velocidade_padrao_mms)
             if velocidade <= 0:
                 velocidade = payload.velocidade_padrao_mms
             
+            # Converte as coordenadas brutas do AutoLaser para milímetros reais (/ 1000)
+            perimetro_mm = perimetro_bruto / 1000.0
             perimetro_total_mm += perimetro_mm
 
-            # Gravação (Velocidade >= 80 mm/s)
-            # Aplica o passo de 0.050 mm do AutoLaser (1 mm / 0.050 mm = 20 passadas/mm)
+            # Se for velocidade de gravação (>= 80 mm/s)
+            # Aplica o passo de 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas/mm)
             if velocidade >= 80.0:
                 passo_mm = 0.050
                 fator_linhas = 1.0 / passo_mm  # 20 passadas por mm
-                tempo_seg = (perimetro_mm * fator_linhas) / velocidade
+                
+                # A distância total varrida na gravação considera as passadas de preenchimento
+                distancia_varredura_mm = perimetro_mm * fator_linhas
+                tempo_seg = distancia_varredura_mm / velocidade
             else:
                 # Corte vetorial direto
                 tempo_seg = perimetro_mm / velocidade
