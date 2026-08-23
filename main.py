@@ -80,8 +80,8 @@ def process_svg_by_color(svg_url: str):
             cor = cor.upper() if cor else "#000000"
 
             try:
-                # Aplica a divisão por 1000 para ajustar à escala real em mm do AutoLaser
-                comprimento = path.length() / 1000.0
+                # Lê o valor bruto em coordenadas de unidades do vetor
+                comprimento = path.length()
             except Exception:
                 comprimento = 0.0
                 
@@ -132,27 +132,29 @@ def health_check():
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
     try:
-        perimetros_por_cor = process_svg_by_color(payload.file_url)
+        perimetros_brutos = process_svg_by_color(payload.file_url)
         tempo_total_segundos = 0.0
         perimetro_total_mm = 0.0
 
         vel_map = {k.upper(): v for k, v in payload.velocidades_por_cor.items()}
 
-        for cor, perimetro_mm in perimetros_por_cor.items():
+        for cor, perimetro_bruto in perimetros_brutos.items():
             velocidade = vel_map.get(cor, payload.velocidade_padrao_mms)
             if velocidade <= 0:
                 velocidade = payload.velocidade_padrao_mms
             
+            # Ajusta o perímetro em MM com a escala /1000 das casas decimais do AutoLaser
+            perimetro_mm = perimetro_bruto / 1000.0
             perimetro_total_mm += perimetro_mm
 
-            # Se a velocidade for de gravação (>= 80 mm/s)
-            # Aplica a precisão de passo 0.050 mm do AutoLaser (20 passadas/mm)
+            # Se for velocidade de gravação (ex: >= 80 mm/s)
+            # Aplica a precisão de passo 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas/mm)
             if velocidade >= 80.0:
                 passo_mm = 0.050
                 fator_linhas = 1.0 / passo_mm  # 20 passadas por mm
                 tempo_seg = (perimetro_mm * fator_linhas) / velocidade
             else:
-                # Corte vetorial puro
+                # Corte vetorial simples
                 tempo_seg = perimetro_mm / velocidade
 
             tempo_total_segundos += tempo_seg
