@@ -11,36 +11,31 @@ app = FastAPI(title="Calculador de SVG para Laser por Cores + AppSheet Integrati
 
 class ColorSpeed(BaseModel):
     file_url: str
-    row_id: str                          # ID/Key do registro na tabela do AppSheet
-    app_id: str                          # App ID do AppSheet
-    access_key: str                      # Application Access Key do AppSheet
-    table_name: str = "Formação Preço"   # Nome da tabela no AppSheet
+    row_id: str
+    app_id: str
+    access_key: str
+    table_name: str = "Formação Preço"
     velocidades_por_cor: Dict[str, float]
     velocidade_padrao_mms: float = 20.0
 
 def normalize_color(color_str: Optional[str]) -> Optional[str]:
     if not color_str or color_str.lower() in ['none', 'transparent']:
         return None
-    
     color_str = color_str.strip().upper()
     color_map = {
         'BLACK': '#000000', 'RED': '#FF0000', 'BLUE': '#0000FF',
         'GREEN': '#008000', 'YELLOW': '#FFFF00', 'CYAN': '#00FFFF', 'MAGENTA': '#FF00FF'
     }
-    
     if color_str in color_map:
         return color_map[color_str]
-        
     if color_str.startswith('#'):
         if len(color_str) == 4:
             return f"#{color_str[1]*2}{color_str[2]*2}{color_str[3]*2}"
         return color_str
-        
     rgb_match = re.search(r'rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)', color_str.lower())
     if rgb_match:
         r, g, b = map(int, rgb_match.groups())
         return f"#{r:02X}{g:02X}{b:02X}"
-        
     return color_str
 
 def get_element_color(attr: dict) -> str:
@@ -48,25 +43,23 @@ def get_element_color(attr: dict) -> str:
     if stroke and stroke.lower() != 'none':
         norm = normalize_color(stroke)
         if norm: return norm
-        
     style = attr.get('style', '')
     if style:
         stroke_match = re.search(r'stroke\s*:\s*([^;]+)', style)
         if stroke_match:
             norm = normalize_color(stroke_match.group(1))
             if norm: return norm
-            
     fill = attr.get('fill')
     if fill and fill.lower() != 'none':
         norm = normalize_color(fill)
         if norm: return norm
-        
     return "#000000"
 
 def process_svg_by_color(svg_url: str):
-    response = requests.get(svg_url)
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    response = requests.get(svg_url, headers=headers, timeout=15)
     if response.status_code != 200:
-        raise Exception("Não foi possível baixar o arquivo SVG.")
+        raise Exception(f"Erro ao baixar o arquivo SVG (Status HTTP: {response.status_code})")
     
     svg_content = response.content
     temp_path = "/tmp/temp_file.svg"
@@ -93,11 +86,7 @@ def process_svg_by_color(svg_url: str):
     for path, attr in zip(paths, attributes):
         cor = get_element_color(attr)
         comprimento_mm = path.length() * scale_factor_mm
-        
-        if cor in perimetros_por_cor:
-            perimetros_por_cor[cor] += comprimento_mm
-        else:
-            perimetros_por_cor[cor] = comprimento_mm
+        perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
 
     for cor in perimetros_por_cor:
         perimetros_por_cor[cor] = round(perimetros_por_cor[cor], 2)
@@ -105,15 +94,12 @@ def process_svg_by_color(svg_url: str):
     return perimetros_por_cor
 
 def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: str, perimetro_mm: float, tempo_minutos: float):
-    """Envia requisição POST para a API do AppSheet para atualizar a linha do ID 70"""
     url = f"https://api.appsheet.com/api/v2/apps/{app_id}/tables/{table_name}/Action"
-    
     headers = {
         "ApplicationAccessKey": access_key,
         "Content-Type": "application/json"
     }
     
-    # Converte o ID para Inteiro (garante que 70 seja enviado como número)
     try:
         formatted_row_id = int(row_id)
     except ValueError:
@@ -134,20 +120,18 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
         ]
     }
     
-    response = requests.post(url, json=payload, headers=headers)
-    print(f"Status AppSheet Update: {response.status_code}")
-    print(f"Resposta AppSheet: {response.text}")
+    res = requests.post(url, json=payload, headers=headers)
+    print(f"Update AppSheet Status: {res.status_code}")
+    print(f"Resposta AppSheet: {res.text}")
 
 @app.get("/")
 def health_check():
-    return {"status": "online", "message": "API de Cálculo de SVG com Atualização do AppSheet Operante!"}
+    return {"status": "online", "message": "API Operante"}
 
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
     try:
         perimetros_por_cor = process_svg_by_color(payload.file_url)
-        
-        detalhes_por_cor = {}
         tempo_total_segundos = 0.0
         perimetro_total_mm = 0.0
 
@@ -155,23 +139,16 @@ def calcular_corte(payload: ColorSpeed):
 
         for cor, perimetro_mm in perimetros_por_cor.items():
             velocidade = vel_map.get(cor, payload.velocidade_padrao_mms)
-            tempo_seg = round(perimetro_mm / velocidade, 2)
-            tempo_min = round(tempo_seg / 60.0, 2)
+            if velocidade <= 0:
+                velocidade = payload.velocidade_padrao_mms
             
-            detalhes_por_cor[cor] = {
-                "perimetro_mm": perimetro_mm,
-                "velocidade_mms": velocidade,
-                "tempo_segundos": tempo_seg,
-                "tempo_minutos": tempo_min
-            }
-            
+            tempo_seg = perimetro_mm / velocidade
             tempo_total_segundos += tempo_seg
             perimetro_total_mm += perimetro_mm
 
         perimetro_final = round(perimetro_total_mm, 2)
         tempo_minutos_final = round(tempo_total_segundos / 60.0, 2)
 
-        # Atualiza o AppSheet via REST API
         update_appsheet_row(
             app_id=payload.app_id,
             access_key=payload.access_key,
@@ -184,10 +161,9 @@ def calcular_corte(payload: ColorSpeed):
         return {
             "status": "success",
             "perimetro_total_mm": perimetro_final,
-            "tempo_total_segundos": round(tempo_total_segundos, 2),
-            "tempo_total_minutos": tempo_minutos_final,
-            "detalhes_por_cor": detalhes_por_cor
+            "tempo_total_minutos": tempo_minutos_final
         }
 
     except Exception as e:
+        print(f"Erro no processamento: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
