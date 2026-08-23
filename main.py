@@ -60,15 +60,14 @@ def process_svg_by_color(svg_url: str):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
-    # Prevenção contra estouro de erro 500 no download
     try:
         response = requests.get(svg_url, headers=headers, timeout=15)
         if response.status_code != 200:
-            print(f"Erro no download do SVG. Status HTTP: {response.status_code}")
+            print(f"Erro no download do SVG (HTTP {response.status_code})")
             return {}
         svg_content = response.content
     except Exception as e:
-        print(f"Exceção ao baixar arquivo SVG: {str(e)}")
+        print(f"Exceção ao baixar SVG: {str(e)}")
         return {}
 
     temp_path = "/tmp/temp_file.svg"
@@ -77,38 +76,43 @@ def process_svg_by_color(svg_url: str):
 
     perimetros_por_cor: Dict[str, float] = {}
 
-    # Prevenção contra falhas na leitura dos vetores do SVG
     try:
         paths, attributes = svg2paths(temp_path)
-        scale_factor_mm = 0.26458333
         
+        # Ajusta fator de escala (padrão em pixels para mm: ~0.264583)
+        scale_factor_mm = 0.26458333
         try:
             tree = ET.fromstring(svg_content)
-            width_attr = tree.attrib.get('width', '')
+            width_attr = tree.attrib.get('width', '').lower()
             if 'mm' in width_attr:
                 scale_factor_mm = 1.0
         except Exception:
             pass
 
         for path, attr in zip(paths, attributes):
+            # Normaliza a cor para caixa alta (ex: #000000)
             cor = get_element_color(attr)
+            if cor:
+                cor = cor.upper()
+            else:
+                cor = "#000000"
+
             try:
+                # Calcula o comprimento real do vetor
                 comprimento_mm = path.length() * scale_factor_mm
             except Exception:
                 comprimento_mm = 0.0
+                
             perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
 
     except Exception as e:
-        print(f"Aviso na leitura svgpathtools: {str(e)}")
+        print(f"Erro na leitura dos vetores do SVG: {str(e)}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-    for cor in perimetros_por_cor:
-        perimetros_por_cor[cor] = round(perimetros_por_cor[cor], 2)
-
     return perimetros_por_cor
-
+    
 def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: str, perimetro_mm: float, tempo_minutos: float):
     url = f"https://api.appsheet.com/api/v2/apps/{app_id}/tables/{table_name}/Action"
     headers = {
