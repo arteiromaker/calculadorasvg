@@ -75,17 +75,20 @@ def process_svg_by_color(svg_url: str):
 
     try:
         paths, attributes = svg2paths(temp_path)
+        # Padrão 96 DPI: 1 px = 0.26458333 mm
+        scale_factor_mm = 0.26458333 
+
         for path, attr in zip(paths, attributes):
             cor = get_element_color(attr)
             cor = cor.upper() if cor else "#000000"
 
             try:
-                # Lê o valor bruto em coordenadas de unidades do vetor
-                comprimento = path.length()
+                # Converte os pixels do SVG para milímetros reais
+                comprimento_mm = path.length() * scale_factor_mm
             except Exception:
-                comprimento = 0.0
+                comprimento_mm = 0.0
                 
-            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento
+            perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
 
     except Exception as e:
         print(f"Erro no processamento SVG: {str(e)}")
@@ -132,29 +135,27 @@ def health_check():
 @app.post("/calcular-corte")
 def calcular_corte(payload: ColorSpeed):
     try:
-        perimetros_brutos = process_svg_by_color(payload.file_url)
+        perimetros_por_cor = process_svg_by_color(payload.file_url)
         tempo_total_segundos = 0.0
         perimetro_total_mm = 0.0
 
         vel_map = {k.upper(): v for k, v in payload.velocidades_por_cor.items()}
 
-        for cor, perimetro_bruto in perimetros_brutos.items():
+        for cor, perimetro_mm in perimetros_por_cor.items():
             velocidade = vel_map.get(cor, payload.velocidade_padrao_mms)
             if velocidade <= 0:
                 velocidade = payload.velocidade_padrao_mms
             
-            # Ajusta o perímetro em MM com a escala /1000 das casas decimais do AutoLaser
-            perimetro_mm = perimetro_bruto / 1000.0
             perimetro_total_mm += perimetro_mm
 
             # Se for velocidade de gravação (ex: >= 80 mm/s)
-            # Aplica a precisão de passo 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas/mm)
+            # Aplica o passo de 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas)
             if velocidade >= 80.0:
                 passo_mm = 0.050
-                fator_linhas = 1.0 / passo_mm  # 20 passadas por mm
+                fator_linhas = 1.0 / passo_mm  # 20 passadas/mm
                 tempo_seg = (perimetro_mm * fator_linhas) / velocidade
             else:
-                # Corte vetorial simples
+                # Corte vetorial direto
                 tempo_seg = perimetro_mm / velocidade
 
             tempo_total_segundos += tempo_seg
