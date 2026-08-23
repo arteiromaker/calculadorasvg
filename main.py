@@ -63,11 +63,11 @@ def process_svg_by_color(svg_url: str):
     try:
         response = requests.get(svg_url, headers=headers, timeout=15)
         if response.status_code != 200:
-            print(f"Erro no download do SVG (HTTP {response.status_code})")
+            print(f"Erro no download do SVG. Status HTTP: {response.status_code}")
             return {}
         svg_content = response.content
     except Exception as e:
-        print(f"Exceção ao baixar SVG: {str(e)}")
+        print(f"Exceção ao baixar arquivo SVG: {str(e)}")
         return {}
 
     temp_path = "/tmp/temp_file.svg"
@@ -79,18 +79,37 @@ def process_svg_by_color(svg_url: str):
     try:
         paths, attributes = svg2paths(temp_path)
         
-        # Ajusta fator de escala (padrão em pixels para mm: ~0.264583)
-        scale_factor_mm = 0.26458333
+        # 1. Identifica a escala real do arquivo para converter unidades em MM
+        scale_factor_mm = 0.26458333  # Escala padrão 96 DPI (1 px = 0.264583 mm)
+        
         try:
             tree = ET.fromstring(svg_content)
-            width_attr = tree.attrib.get('width', '').lower()
-            if 'mm' in width_attr:
-                scale_factor_mm = 1.0
-        except Exception:
-            pass
+            width_str = tree.attrib.get('width', '')
+            height_str = tree.attrib.get('height', '')
+            viewbox_str = tree.attrib.get('viewBox', '')
 
+            # Caso a largura venha diretamente declarada em mm
+            if 'mm' in width_str.lower():
+                val = float(re.sub(r'[^0-9.]', '', width_str))
+                if viewbox_str:
+                    vb_parts = viewbox_str.replace(',', ' ').split()
+                    if len(vb_parts) == 4 and float(vb_parts[2]) > 0:
+                        scale_factor_mm = val / float(vb_parts[2])
+                else:
+                    scale_factor_mm = 1.0
+            elif 'cm' in width_str.lower():
+                val = float(re.sub(r'[^0-9.]', '', width_str)) * 10.0
+                if viewbox_str:
+                    vb_parts = viewbox_str.replace(',', ' ').split()
+                    if len(vb_parts) == 4 and float(vb_parts[2]) > 0:
+                        scale_factor_mm = val / float(vb_parts[2])
+                else:
+                    scale_factor_mm = 10.0
+        except Exception as e_scale:
+            print(f"Aviso ao calcular escala MM: {str(e_scale)}")
+
+        # 2. Soma o perímetro real de cada caminho
         for path, attr in zip(paths, attributes):
-            # Normaliza a cor para caixa alta (ex: #000000)
             cor = get_element_color(attr)
             if cor:
                 cor = cor.upper()
@@ -98,7 +117,6 @@ def process_svg_by_color(svg_url: str):
                 cor = "#000000"
 
             try:
-                # Calcula o comprimento real do vetor
                 comprimento_mm = path.length() * scale_factor_mm
             except Exception:
                 comprimento_mm = 0.0
@@ -106,10 +124,13 @@ def process_svg_by_color(svg_url: str):
             perimetros_por_cor[cor] = perimetros_por_cor.get(cor, 0.0) + comprimento_mm
 
     except Exception as e:
-        print(f"Erro na leitura dos vetores do SVG: {str(e)}")
+        print(f"Aviso na leitura svgpathtools: {str(e)}")
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+    for cor in perimetros_por_cor:
+        perimetros_por_cor[cor] = round(perimetros_por_cor[cor], 2)
 
     return perimetros_por_cor
     
