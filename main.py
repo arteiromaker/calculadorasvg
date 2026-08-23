@@ -23,7 +23,7 @@ def normalize_color(color_str: Optional[str]) -> Optional[str]:
         return None
     color_str = color_str.strip().upper()
     color_map = {
-        'BLACK': '#000000', 'RED': '#FF0000', 'BLUE': '#0000FF',
+        'BLACK': '#000000', 'RED': '#FF000D', 'BLUE': '#0000FF',
         'GREEN': '#008000', 'YELLOW': '#FFFF00', 'CYAN': '#00FFFF', 'MAGENTA': '#FF00FF'
     }
     if color_str in color_map:
