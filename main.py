@@ -1,8 +1,9 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import requests
-import re
+import xml.etree.ElementTree as ET
 import os
+import re
 from typing import Dict, Optional
 from svgpathtools import svg2paths
 
@@ -75,15 +76,32 @@ def process_svg_by_color(svg_url: str):
 
     try:
         paths, attributes = svg2paths(temp_path)
-        # Padrão 96 DPI: 1 px = 0.26458333 mm
-        scale_factor_mm = 0.26458333 
+        
+        # 1. Tenta identificar a escala de conversão das coordenadas do SVG para Milímetros
+        scale_factor_mm = 0.001  # Fator de escala /1000 para coordenadas de arquivos AutoLaser/Corel
+        
+        try:
+            tree = ET.fromstring(svg_content)
+            width_str = tree.attrib.get('width', '')
+            viewbox_str = tree.attrib.get('viewBox', '')
 
+            if 'mm' in width_str.lower():
+                val = float(re.sub(r'[^0-9.]', '', width_str))
+                if viewbox_str:
+                    vb_parts = viewbox_str.replace(',', ' ').split()
+                    if len(vb_parts) == 4 and float(vb_parts[2]) > 0:
+                        scale_factor_mm = val / float(vb_parts[2])
+                else:
+                    scale_factor_mm = 1.0
+        except Exception:
+            pass
+
+        # 2. Converte o comprimento bruto de cada vetor para milímetros reais
         for path, attr in zip(paths, attributes):
             cor = get_element_color(attr)
             cor = cor.upper() if cor else "#000000"
 
             try:
-                # Converte os pixels do SVG para milímetros reais
                 comprimento_mm = path.length() * scale_factor_mm
             except Exception:
                 comprimento_mm = 0.0
@@ -148,14 +166,14 @@ def calcular_corte(payload: ColorSpeed):
             
             perimetro_total_mm += perimetro_mm
 
-            # Se for velocidade de gravação (ex: >= 80 mm/s)
-            # Aplica o passo de 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas)
+            # Se for velocidade de gravação (>= 80 mm/s)
+            # Aplica a precisão de passo 0.050 mm do AutoLaser (1mm / 0.050mm = 20 passadas/mm)
             if velocidade >= 80.0:
                 passo_mm = 0.050
-                fator_linhas = 1.0 / passo_mm  # 20 passadas/mm
+                fator_linhas = 1.0 / passo_mm  # 20 passadas por mm
                 tempo_seg = (perimetro_mm * fator_linhas) / velocidade
             else:
-                # Corte vetorial direto
+                # Corte vetorial puro
                 tempo_seg = perimetro_mm / velocidade
 
             tempo_total_segundos += tempo_seg
