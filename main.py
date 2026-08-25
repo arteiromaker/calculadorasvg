@@ -164,10 +164,10 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
         "Properties": {"Locale": "pt-BR", "Timezone": "E. South America Standard Time"},
         "Rows": [{
             "ID": str(row_id),
-            "Altura cm": resultados["altura_cm"],
-            "Largura cm": resultados["largura_cm"],
-            "Tempo de Máquina": resultados["tempo_total_min"],
-            "Tempo_Corte_Min": resultados["tempo_corte_min"],
+            "Altura": resultados["altura"],
+            "Largura": resultados["largura"],
+            "TempoServ": resultados["temposerv"],
+            "Tempo_Corte_Minutos": resultados["tempo_corte_minutos"],
             "Tempo_Gravacao_Min": resultados["tempo_gravacao_min"]
         }]
     }
