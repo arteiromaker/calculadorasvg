@@ -115,9 +115,17 @@ def process_svg_and_calculate(svg_url: str, vel_map: dict, vel_padrao: float):
                 red_xmin, red_xmax = min(red_xmin, xmin), max(red_xmax, xmax)
                 red_ymin, red_ymax = min(red_ymin, ymin), max(red_ymax, ymax)
 
+# ... (mantenha a parte de cima da função igual até o bloco de cálculos) ...
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+    # ==========================================
+    # NOVAS CONSTANTES DE COMPENSAÇÃO MECÂNICA
+    # ==========================================
+    OVERSCAN_MM = 40.0            # Distância extra (freio/aceleração) na gravação (ex: 20mm para cada lado)
+    FATOR_CURVAS_CORTE = 1.35     # +35% no tempo de corte para compensar curvas e pulos em branco
+    FATOR_PULOS_GRAVACAO = 1.10   # +10% no tempo de gravação para compensar pequenos pulos no Y
 
     # 1. Cálculos de Dimensão Global em CM
     width_cm, height_cm = 0.0, 0.0
@@ -129,7 +137,9 @@ def process_svg_and_calculate(svg_url: str, vel_map: dict, vel_padrao: float):
     cut_perimeter_mm = cut_perimeter_px * SCALE_PX_TO_MM
     vel_corte = vel_map.get('#000000', vel_padrao)
     if vel_corte <= 0: vel_corte = vel_padrao
-    tempo_corte_seg = cut_perimeter_mm / vel_corte
+    
+    tempo_corte_matematico = cut_perimeter_mm / vel_corte
+    tempo_corte_seg = tempo_corte_matematico * FATOR_CURVAS_CORTE # Aplica a correção física
 
     # 3. Cálculo de Tempo de Gravação (Vermelho)
     tempo_gravacao_seg = 0.0
@@ -137,13 +147,17 @@ def process_svg_and_calculate(svg_url: str, vel_map: dict, vel_padrao: float):
         red_width_mm = (red_xmax - red_xmin) * SCALE_PX_TO_MM
         red_height_mm = (red_ymax - red_ymin) * SCALE_PX_TO_MM
         
-        # Padrão de 300mm/s para gravação caso não seja enviado pelo AppSheet
         vel_gravacao = vel_map.get('#FF0000', 300.0) 
         if vel_gravacao <= 0: vel_gravacao = 300.0
         
-        # Fórmula: (Altura / Scan Gap) * Largura da área a ser preenchida
-        distancia_gravacao_mm = (red_height_mm / SCAN_GAP_MM) * red_width_mm
-        tempo_gravacao_seg = distancia_gravacao_mm / vel_gravacao
+        # O laser viaja além da largura para frear e acelerar (Overscan)
+        largura_real_varredura = red_width_mm + OVERSCAN_MM
+        
+        # Fórmula: (Altura / Scan Gap) * Largura total com overscan
+        distancia_gravacao_mm = (red_height_mm / SCAN_GAP_MM) * largura_real_varredura
+        
+        tempo_gravacao_matematico = distancia_gravacao_mm / vel_gravacao
+        tempo_gravacao_seg = tempo_gravacao_matematico * FATOR_PULOS_GRAVACAO # Aplica correção física
 
     return {
         "largura_cm": round(width_cm, 2),
