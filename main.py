@@ -172,15 +172,16 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
         "Properties": {"Locale": "pt-BR", "Timezone": "E. South America Standard Time"},
         "Rows": [{
             "ID": str(row_id),
-            "Altura": resultados["altura_cm"],  # Certifique-se que a coluna no AppSheet se chama "Altura"
-            "Largura": resultados["largura_cm"], # Certifique-se que a coluna se chama "Largura"
-            "TempoServ": tempo_formatado         # Enviando como 00:00:00
+            # Transforma o ponto em vírgula para o AppSheet entender os decimais corretamente
+            "Altura": str(resultados["altura_cm"]).replace('.', ','),
+            "Largura": str(resultados["largura_cm"]).replace('.', ','),
+            "TempoServ": tempo_formatado
         }]
     }
     
     res = requests.post(url, json=payload, headers=headers)
     print(f"Update AppSheet Status: {res.status_code} - Resposta: {res.text}")
-    
+
 def health_check():
     return {"status": "online", "message": "API Operante"}
 
