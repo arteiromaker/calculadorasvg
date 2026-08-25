@@ -153,29 +153,34 @@ def process_svg_and_calculate(svg_url: str, vel_map: dict, vel_padrao: float):
         "tempo_total_min": round((tempo_corte_seg + tempo_gravacao_seg) / 60.0, 2)
     }
 
+def format_appsheet_time(minutos_float):
+    """Converte minutos decimais (ex: 15.5) para formato Time do AppSheet (00:15:30)"""
+    h = int(minutos_float // 60)
+    m = int(minutos_float % 60)
+    s = int(round((minutos_float * 60) % 60))
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
 def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: str, resultados: dict):
     url = f"https://api.appsheet.com/api/v2/apps/{app_id}/tables/{table_name}/Action"
     headers = {"ApplicationAccessKey": access_key, "Content-Type": "application/json"}
     
-    # ATENÇÃO: As chaves dentro de "Rows" precisam ter exatamente o mesmo nome
-    # que as colunas que você tem na tabela do AppSheet. 
+    # Converte o float calculado para o formato Time 00:00:00 exigido pelo AppSheet
+    tempo_formatado = format_appsheet_time(resultados["tempo_total_min"])
+    
     payload = {
         "Action": "Edit",
         "Properties": {"Locale": "pt-BR", "Timezone": "E. South America Standard Time"},
         "Rows": [{
             "ID": str(row_id),
-            "Altura": resultados["altura"],
-            "Largura": resultados["largura"],
-            "TempoServ": resultados["temposerv"],
-            "Tempo_Corte_Minutos": resultados["tempo_corte_minutos"],
-            "Tempo_Gravacao_Min": resultados["tempo_gravacao_min"]
+            "Altura": resultados["altura_cm"],  # Certifique-se que a coluna no AppSheet se chama "Altura"
+            "Largura": resultados["largura_cm"], # Certifique-se que a coluna se chama "Largura"
+            "TempoServ": tempo_formatado         # Enviando como 00:00:00
         }]
     }
     
     res = requests.post(url, json=payload, headers=headers)
     print(f"Update AppSheet Status: {res.status_code} - Resposta: {res.text}")
-
-@app.get("/")
+    
 def health_check():
     return {"status": "online", "message": "API Operante"}
 
