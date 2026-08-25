@@ -123,7 +123,7 @@ def process_svg_and_calculate(svg_url: str, vel_map: dict, vel_padrao: float):
     # ==========================================
     # NOVAS CONSTANTES DE COMPENSAÇÃO MECÂNICA
     # ==========================================
-    OVERSCAN_MM = 40.0            # Distância extra (freio/aceleração) na gravação (ex: 20mm para cada lado)
+    OVERSCAN_MM = 50.0            # Distância extra (freio/aceleração) na gravação (ex: 20mm para cada lado)
     FATOR_CURVAS_CORTE = 1.35     # +35% no tempo de corte para compensar curvas e pulos em branco
     FATOR_PULOS_GRAVACAO = 1.10   # +10% no tempo de gravação para compensar pequenos pulos no Y
 
