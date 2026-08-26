@@ -117,28 +117,26 @@ def process_dxf(file_path: str, vel_map: dict, vel_padrao: float, overscan: floa
     black_entities = []
     
     for entity in msp:
-        # Tenta pegar a cor direta ou a cor da camada
         color = entity.dxf.color
         if color == 256: 
             try:
                 color = doc.layers.get(entity.dxf.layer).color
             except:
-                color = 7 # Padrão preto/branco
+                color = 7 
                 
-        # ACI 1 = Vermelho (Gravação). Qualquer outra é Corte.
         if color == 1:
             red_entities.append(entity)
         else:
             black_entities.append(entity)
 
-    # Medidas globais (em cm, já que DXF nativamente é em mm)
+    # Medidas globais (O DXF já é nativamente em mm, dividimos por 10 para virar cm)
     global_bbox = extents(msp)
     width_cm, height_cm = 0.0, 0.0
     if global_bbox.has_data:
         width_cm = (global_bbox.extmax.x - global_bbox.extmin.x) / 10.0
         height_cm = (global_bbox.extmax.y - global_bbox.extmin.y) / 10.0
 
-    # Gravação (Vermelhos)
+    # Gravação (Vermelhos) - Já em milímetros puros
     tempo_gravacao_seg = 0.0
     if red_entities:
         red_bbox = extents(red_entities)
@@ -152,12 +150,11 @@ def process_dxf(file_path: str, vel_map: dict, vel_padrao: float, overscan: floa
             distancia_gravacao_mm = (red_height_mm / SCAN_GAP_MM) * largura_real_varredura
             tempo_gravacao_seg = (distancia_gravacao_mm / vel_gravacao) * fator_gravacao
 
-    # Corte (Pretos/Outros) - Transforma as entidades em curvas e soma o comprimento
+    # Corte (Pretos/Outros) - Já em milímetros puros
     cut_perimeter_mm = 0.0
     for entity in black_entities:
         try:
             p = make_path(entity)
-            # Achata as curvas em minúsculas linhas retas de 0.1mm para medição precisa
             vertices = list(p.flattening(distance=0.1))
             for i in range(1, len(vertices)):
                 cut_perimeter_mm += vertices[i-1].distance(vertices[i])
