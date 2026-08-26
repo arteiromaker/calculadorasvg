@@ -209,11 +209,18 @@ def health_check():
 def calcular_corte(payload: ColorSpeed):
     temp_path = None
     try:
+        # Dedo-duro: Mostra no log do Render a URL exata que chegou
+        print(f"--- INICIANDO NOVO CÁLCULO ---")
+        print(f"URL recebida do AppSheet: {payload.file_url}")
+        
         # Download do Arquivo
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(payload.file_url, headers=headers, timeout=15)
+        
         if response.status_code != 200:
-            raise Exception("Erro ao baixar o arquivo.")
+            print(f"ERRO DE DOWNLOAD! Status: {response.status_code}")
+            print(f"Resposta do AppSheet: {response.text[:300]}")
+            raise Exception(f"Erro ao baixar o arquivo. Status HTTP: {response.status_code}")
             
         # Detecta se é SVG ou DXF pelo nome da URL
         is_dxf = payload.file_url.lower().endswith('.dxf')
