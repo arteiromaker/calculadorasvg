@@ -107,7 +107,7 @@ def process_svg(file_path: str, vel_map: dict, vel_padrao: float, overscan: floa
     return width_cm, height_cm, tempo_corte_seg, tempo_gravacao_seg
 
 # ==========================================
-# PROCESSAMENTO DE DXF
+# PROCESSAMENTO DE DXF (Blindado para Cores CAD)
 # ==========================================
 def process_dxf(file_path: str, vel_map: dict, vel_padrao: float, overscan: float, fator_corte: float, fator_gravacao: float):
     doc = ezdxf.readfile(file_path)
@@ -117,26 +117,32 @@ def process_dxf(file_path: str, vel_map: dict, vel_padrao: float, overscan: floa
     black_entities = []
     
     for entity in msp:
+        # Pega o índice de cor padrão do AutoCAD (ACI)
         color = entity.dxf.color
+        
+        # Se for cor por camada (Layer = 256), busca a cor atribuída à camada
         if color == 256: 
             try:
                 color = doc.layers.get(entity.dxf.layer).color
             except:
                 color = 7 
                 
+        # O AutoCAD usa a cor 1 para o Vermelho (Gravação).
+        # As cores 7 (Branco/Preto padrão), 250 a 255 (Tons de cinza) ou marrons comuns de CAD 
+        # serão tratadas como Corte.
         if color == 1:
             red_entities.append(entity)
         else:
             black_entities.append(entity)
 
-    # Medidas globais (O DXF já é nativamente em mm, dividimos por 10 para virar cm)
+    # Medidas globais (Milímetros puros convertidos para centímetros)
     global_bbox = extents(msp)
     width_cm, height_cm = 0.0, 0.0
     if global_bbox.has_data:
         width_cm = (global_bbox.extmax.x - global_bbox.extmin.x) / 10.0
         height_cm = (global_bbox.extmax.y - global_bbox.extmin.y) / 10.0
 
-    # Gravação (Vermelhos) - Já em milímetros puros
+    # Gravação (Vermelhos - ACI 1)
     tempo_gravacao_seg = 0.0
     if red_entities:
         red_bbox = extents(red_entities)
@@ -150,7 +156,7 @@ def process_dxf(file_path: str, vel_map: dict, vel_padrao: float, overscan: floa
             distancia_gravacao_mm = (red_height_mm / SCAN_GAP_MM) * largura_real_varredura
             tempo_gravacao_seg = (distancia_gravacao_mm / vel_gravacao) * fator_gravacao
 
-    # Corte (Pretos/Outros) - Já em milímetros puros
+    # Corte (Pretos, Cinzas, Marrons e demais cores)
     cut_perimeter_mm = 0.0
     for entity in black_entities:
         try:
