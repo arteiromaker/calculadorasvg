@@ -32,7 +32,7 @@ class LaserParams(BaseModel):
     scan_gap_mm: float = 0.05       
 
 # ==========================================
-# PROCESSAMENTO DE DXF (Por Camada/Layer)
+# PROCESSAMENTO DE DXF (Com Agrupamento Inteligente de Gravação)
 # ==========================================
 def process_dxf(file_path: str, p: LaserParams):
     doc = ezdxf.readfile(file_path)
@@ -42,14 +42,10 @@ def process_dxf(file_path: str, p: LaserParams):
     corte_entities = []
 
     for entity in msp:
-        # Pega o nome da camada e deixa tudo em maiúsculo para não ter erro de digitação
         layer_name = entity.dxf.layer.upper() if entity.dxf.layer else ""
-        
-        # Se a camada tiver "GRAV" (GRAVACAO, GRAVAR, GRAV) ou "SCAN", é preenchimento.
         if 'GRAV' in layer_name or 'SCAN' in layer_name:
             gravacao_entities.append(entity)
         else:
-            # Todo o resto (incluindo a camada CORTE) vai ser perímetro.
             corte_entities.append(entity)
 
     global_bbox = extents(msp)
@@ -58,19 +54,63 @@ def process_dxf(file_path: str, p: LaserParams):
         width_cm = (global_bbox.extmax.x - global_bbox.extmin.x) / 10.0
         height_cm = (global_bbox.extmax.y - global_bbox.extmin.y) / 10.0
 
-    # Gravação (Área de varredura)
+    # ---------------------------------------------------------
+    # NOVO ALGORITMO: AGRUPAMENTO INTELIGENTE (SMART CLUSTERING)
+    # ---------------------------------------------------------
     tempo_gravacao_seg = 0.0
     if gravacao_entities:
-        red_bbox = extents(gravacao_entities)
-        if red_bbox.has_data:
-            red_width_mm = red_bbox.extmax.x - red_bbox.extmin.x
-            red_height_mm = red_bbox.extmax.y - red_bbox.extmin.y
-            vel_gravacao = p.vel_gravacao if p.vel_gravacao > 0 else 300.0
-            
-            distancia_gravacao_mm = (red_height_mm / p.scan_gap_mm) * (red_width_mm + p.overscan_mm)
-            tempo_gravacao_seg = (distancia_gravacao_mm / vel_gravacao) * p.fator_gravacao
+        boxes = []
+        # Passo 1: Pega a caixinha (medida) de cada linha individual
+        for entity in gravacao_entities:
+            try:
+                b = extents([entity])
+                if b.has_data:
+                    boxes.append([b.extmin.x, b.extmin.y, b.extmax.x, b.extmax.y])
+            except:
+                continue
+        
+        # Passo 2: Mescla caixas que se sobrepõem (ex: linhas da mesma letra/desenho)
+        merged_boxes = []
+        for box in boxes:
+            box_merged = False
+            for m in merged_boxes:
+                # Verifica se as caixas se tocam/sobrepõem
+                if not (box[2] < m[0] or box[0] > m[2] or box[3] < m[1] or box[1] > m[3]):
+                    m[0] = min(m[0], box[0])
+                    m[1] = min(m[1], box[1])
+                    m[2] = max(m[2], box[2])
+                    m[3] = max(m[3], box[3])
+                    box_merged = True
+                    break
+            if not box_merged:
+                merged_boxes.append(box)
+                
+        # Repete a mesclagem para garantir (caso a expansão tenha tocado em terceiros)
+        final_boxes = []
+        for box in merged_boxes:
+            box_merged = False
+            for m in final_boxes:
+                if not (box[2] < m[0] or box[0] > m[2] or box[3] < m[1] or box[1] > m[3]):
+                    m[0] = min(m[0], box[0])
+                    m[1] = min(m[1], box[1])
+                    m[2] = max(m[2], box[2])
+                    m[3] = max(m[3], box[3])
+                    box_merged = True
+                    break
+            if not box_merged:
+                final_boxes.append(box)
 
-    # Corte (Perímetro das linhas)
+        # Passo 3: Calcula o tempo somando apenas os "blocos reais" de desenho, ignorando vazios
+        vel_gravacao = p.vel_gravacao if p.vel_gravacao > 0 else 300.0
+        for b in final_boxes:
+            w_mm = b[2] - b[0]
+            h_mm = b[3] - b[1]
+            distancia_bloco = (h_mm / p.scan_gap_mm) * (w_mm + p.overscan_mm)
+            tempo_gravacao_seg += (distancia_bloco / vel_gravacao) * p.fator_gravacao
+
+    # ---------------------------------------------------------
+    # CORTE NORMAL (Perímetro)
+    # ---------------------------------------------------------
     cut_perimeter_mm = 0.0
     for entity in corte_entities:
         try:
