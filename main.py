@@ -148,7 +148,7 @@ def process_svg(file_path: str, p: LaserParams):
     return width_cm, height_cm, tempo_corte_seg, tempo_gravacao_seg
 
 # ==========================================
-# INTEGRAÇÃO APPSHEET
+# INTEGRAÇÃO APPSHEET (Correção da Vírgula/Float)
 # ==========================================
 def format_appsheet_time(minutos_float):
     h = int(minutos_float // 60)
@@ -164,7 +164,13 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
     payload = {
         "Action": "Edit",
         "Properties": {"Locale": "pt-BR", "Timezone": "E. South America Standard Time"},
-        "Rows": [{"ID": str(row_id), "Altura": str(resultados["altura_cm"]).replace('.', ','), "Largura": str(resultados["largura_cm"]).replace('.', ','), "TempoServ": tempo_formatado }]
+        "Rows": [{
+            "ID": str(row_id),
+            # Agora enviamos os NÚMEROS REAIS matemáticos (Float) ao invés de Textos com vírgula!
+            "Altura": resultados["altura_cm"], 
+            "Largura": resultados["largura_cm"], 
+            "TempoServ": tempo_formatado 
+        }]
     }
     requests.post(url, json=payload, headers=headers)
 
