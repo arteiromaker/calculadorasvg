@@ -13,9 +13,9 @@ try:
 except ImportError:
     ezdxf = None
 
-app = FastAPI(title="Calculador Laser por Camadas (Layers) + AppSheet")
+app = FastAPI(title="Motor de Precificação CNC (Simulador Scanline) + AppSheet")
 
-# 1. MODELO ENXUTO (Sem cores, focado nos parâmetros de engenharia)
+# 1. MODELO ENXUTO
 class LaserParams(BaseModel):
     file_url: str
     row_id: str
@@ -32,7 +32,7 @@ class LaserParams(BaseModel):
     scan_gap_mm: float = 0.05       
 
 # ==========================================
-# PROCESSAMENTO DE DXF (Com Agrupamento Inteligente de Gravação)
+# PROCESSAMENTO DE DXF (Motor Scanline de Alta Precisão)
 # ==========================================
 def process_dxf(file_path: str, p: LaserParams):
     doc = ezdxf.readfile(file_path)
@@ -55,58 +55,51 @@ def process_dxf(file_path: str, p: LaserParams):
         height_cm = (global_bbox.extmax.y - global_bbox.extmin.y) / 10.0
 
     # ---------------------------------------------------------
-    # NOVO ALGORITMO: AGRUPAMENTO INTELIGENTE (SMART CLUSTERING)
+    # NOVO MOTOR: SIMULADOR G-CODE (Ray-Casting Scanline)
     # ---------------------------------------------------------
     tempo_gravacao_seg = 0.0
     if gravacao_entities:
-        boxes = []
-        # Passo 1: Pega a caixinha (medida) de cada linha individual
+        segments = []
+        # Passo 1: "Desmonta" todos os vetores, textos e splines em retas microscópicas
         for entity in gravacao_entities:
             try:
-                b = extents([entity])
-                if b.has_data:
-                    boxes.append([b.extmin.x, b.extmin.y, b.extmax.x, b.extmax.y])
+                path_obj = make_path(entity)
+                for subpath in path_obj.sub_paths():
+                    vertices = list(subpath.flattening(distance=0.1))
+                    for i in range(1, len(vertices)):
+                        segments.append((vertices[i-1], vertices[i]))
             except:
                 continue
         
-        # Passo 2: Mescla caixas que se sobrepõem (ex: linhas da mesma letra/desenho)
-        merged_boxes = []
-        for box in boxes:
-            box_merged = False
-            for m in merged_boxes:
-                # Verifica se as caixas se tocam/sobrepõem
-                if not (box[2] < m[0] or box[0] > m[2] or box[3] < m[1] or box[1] > m[3]):
-                    m[0] = min(m[0], box[0])
-                    m[1] = min(m[1], box[1])
-                    m[2] = max(m[2], box[2])
-                    m[3] = max(m[3], box[3])
-                    box_merged = True
-                    break
-            if not box_merged:
-                merged_boxes.append(box)
+        # Passo 2: Varredura Linha a Linha (Idêntico à máquina a laser)
+        if segments:
+            min_y = min(min(s[0].y, s[1].y) for s in segments)
+            max_y = max(max(s[0].y, s[1].y) for s in segments)
+            
+            vel_gravacao = p.vel_gravacao if p.vel_gravacao > 0 else 300.0
+            scan_gap = p.scan_gap_mm if p.scan_gap_mm > 0 else 0.05
+            
+            y = min_y
+            while y <= max_y:
+                # Filtra apenas os traços que a cabeça do laser cruza nesta exata altura (Y)
+                active_segments = [s for s in segments if min(s[0].y, s[1].y) <= y <= max(s[0].y, s[1].y)]
+                intersections = []
                 
-        # Repete a mesclagem para garantir (caso a expansão tenha tocado em terceiros)
-        final_boxes = []
-        for box in merged_boxes:
-            box_merged = False
-            for m in final_boxes:
-                if not (box[2] < m[0] or box[0] > m[2] or box[3] < m[1] or box[1] > m[3]):
-                    m[0] = min(m[0], box[0])
-                    m[1] = min(m[1], box[1])
-                    m[2] = max(m[2], box[2])
-                    m[3] = max(m[3], box[3])
-                    box_merged = True
-                    break
-            if not box_merged:
-                final_boxes.append(box)
-
-        # Passo 3: Calcula o tempo somando apenas os "blocos reais" de desenho, ignorando vazios
-        vel_gravacao = p.vel_gravacao if p.vel_gravacao > 0 else 300.0
-        for b in final_boxes:
-            w_mm = b[2] - b[0]
-            h_mm = b[3] - b[1]
-            distancia_bloco = (h_mm / p.scan_gap_mm) * (w_mm + p.overscan_mm)
-            tempo_gravacao_seg += (distancia_bloco / vel_gravacao) * p.fator_gravacao
+                for p1, p2 in active_segments:
+                    if p1.y == p2.y: continue # Ignora traços 100% horizontais
+                    # Matemática de colisão: onde o raio laser corta a linha
+                    x = p1.x + (y - p1.y) * (p2.x - p1.x) / (p2.y - p1.y)
+                    intersections.append(x)
+                
+                if intersections:
+                    # A viagem da máquina é do ponto X mais à esquerda até o mais à direita
+                    min_x = min(intersections)
+                    max_x = max(intersections)
+                    
+                    dist_varredura = (max_x - min_x) + p.overscan_mm
+                    tempo_gravacao_seg += (dist_varredura / vel_gravacao) * p.fator_gravacao
+                
+                y += scan_gap # A cabeça do laser desce para a próxima linha
 
     # ---------------------------------------------------------
     # CORTE NORMAL (Perímetro)
@@ -127,7 +120,7 @@ def process_dxf(file_path: str, p: LaserParams):
     return width_cm, height_cm, tempo_corte_seg, tempo_gravacao_seg
 
 # ==========================================
-# PROCESSAMENTO DE SVG (Fallback por cor vermelho #FF0000)
+# PROCESSAMENTO DE SVG (Fallback de Segurança)
 # ==========================================
 def normalize_color(color_str: Optional[str]) -> str:
     if not color_str: return "#000000"
@@ -163,7 +156,7 @@ def process_svg(file_path: str, p: LaserParams):
         global_xmin, global_xmax = min(global_xmin, xmin), max(global_xmax, xmax)
         global_ymin, global_ymax = min(global_ymin, ymin), max(global_ymax, ymax)
         
-        if cor_elemento == "#FF0000": # Em SVG, deixamos o vermelho como padrão de gravação
+        if cor_elemento == "#FF0000": 
             red_xmin, red_xmax = min(red_xmin, xmin), max(red_xmax, xmax)
             red_ymin, red_ymax = min(red_ymin, ymin), max(red_ymax, ymax)
         else: 
@@ -188,7 +181,7 @@ def process_svg(file_path: str, p: LaserParams):
     return width_cm, height_cm, tempo_corte_seg, tempo_gravacao_seg
 
 # ==========================================
-# INTEGRAÇÃO APPSHEET (O Retorno da Vírgula pt-BR)
+# INTEGRAÇÃO APPSHEET
 # ==========================================
 def format_appsheet_time(minutos_float):
     h = int(minutos_float // 60)
@@ -204,13 +197,7 @@ def update_appsheet_row(app_id: str, access_key: str, table_name: str, row_id: s
     payload = {
         "Action": "Edit",
         "Properties": {"Locale": "pt-BR", "Timezone": "E. South America Standard Time"},
-        "Rows": [{
-            "ID": str(row_id),
-            # Voltamos a enviar como Texto com Vírgula para o AppSheet entender os decimais!
-            "Altura": str(resultados["altura_cm"]).replace('.', ','),
-            "Largura": str(resultados["largura_cm"]).replace('.', ','),
-            "TempoServ": tempo_formatado 
-        }]
+        "Rows": [{"ID": str(row_id), "Altura": str(resultados["altura_cm"]).replace('.', ','), "Largura": str(resultados["largura_cm"]).replace('.', ','), "TempoServ": tempo_formatado }]
     }
     requests.post(url, json=payload, headers=headers)
 
