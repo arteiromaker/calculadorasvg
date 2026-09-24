@@ -32,7 +32,7 @@ class LaserParams(BaseModel):
     scan_gap_mm: float = 0.05       
 
 # ==========================================
-# PROCESSAMENTO DE DXF (Motor Scanline de Alta Precisão)
+# PROCESSAMENTO DE DXF (Motor Scanline + Anti-Grupos)
 # ==========================================
 def process_dxf(file_path: str, p: LaserParams):
     doc = ezdxf.readfile(file_path)
@@ -41,8 +41,24 @@ def process_dxf(file_path: str, p: LaserParams):
     gravacao_entities = []
     corte_entities = []
 
-    for entity in msp:
-        layer_name = entity.dxf.layer.upper() if entity.dxf.layer else ""
+    # MÁGICA: Quebra todos os grupos (Blocos/INSERT) automaticamente
+    def extrair_entidades(entidades):
+        lista_plana = []
+        for e in entidades:
+            if e.dxftype() == 'INSERT':
+                try:
+                    lista_plana.extend(extrair_entidades(e.virtual_entities()))
+                except:
+                    pass
+            else:
+                lista_plana.append(e)
+        return lista_plana
+
+    # Passa o rodo no arquivo explodindo todos os blocos
+    todas_entidades = extrair_entidades(msp)
+
+    for entity in todas_entidades:
+        layer_name = entity.dxf.layer.upper() if hasattr(entity.dxf, 'layer') and entity.dxf.layer else ""
         if 'GRAV' in layer_name or 'SCAN' in layer_name:
             gravacao_entities.append(entity)
         else:
@@ -55,12 +71,11 @@ def process_dxf(file_path: str, p: LaserParams):
         height_cm = (global_bbox.extmax.y - global_bbox.extmin.y) / 10.0
 
     # ---------------------------------------------------------
-    # NOVO MOTOR: SIMULADOR G-CODE (Ray-Casting Scanline)
+    # MOTOR: SIMULADOR G-CODE (Ray-Casting Scanline)
     # ---------------------------------------------------------
     tempo_gravacao_seg = 0.0
     if gravacao_entities:
         segments = []
-        # Passo 1: "Desmonta" todos os vetores, textos e splines em retas microscópicas
         for entity in gravacao_entities:
             try:
                 path_obj = make_path(entity)
@@ -71,7 +86,6 @@ def process_dxf(file_path: str, p: LaserParams):
             except:
                 continue
         
-        # Passo 2: Varredura Linha a Linha (Idêntico à máquina a laser)
         if segments:
             min_y = min(min(s[0].y, s[1].y) for s in segments)
             max_y = max(max(s[0].y, s[1].y) for s in segments)
@@ -81,25 +95,21 @@ def process_dxf(file_path: str, p: LaserParams):
             
             y = min_y
             while y <= max_y:
-                # Filtra apenas os traços que a cabeça do laser cruza nesta exata altura (Y)
                 active_segments = [s for s in segments if min(s[0].y, s[1].y) <= y <= max(s[0].y, s[1].y)]
                 intersections = []
                 
                 for p1, p2 in active_segments:
-                    if p1.y == p2.y: continue # Ignora traços 100% horizontais
-                    # Matemática de colisão: onde o raio laser corta a linha
+                    if p1.y == p2.y: continue 
                     x = p1.x + (y - p1.y) * (p2.x - p1.x) / (p2.y - p1.y)
                     intersections.append(x)
                 
                 if intersections:
-                    # A viagem da máquina é do ponto X mais à esquerda até o mais à direita
                     min_x = min(intersections)
                     max_x = max(intersections)
-                    
                     dist_varredura = (max_x - min_x) + p.overscan_mm
                     tempo_gravacao_seg += (dist_varredura / vel_gravacao) * p.fator_gravacao
                 
-                y += scan_gap # A cabeça do laser desce para a próxima linha
+                y += scan_gap 
 
     # ---------------------------------------------------------
     # CORTE NORMAL (Perímetro)
