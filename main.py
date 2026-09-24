@@ -64,8 +64,11 @@ def process_dxf(file_path: str, p: LaserParams):
         else:
             corte_entities.append(entity)
 
-    global_bbox = extents(msp)
+    # A MÁGICA DA RÉGUA: Mede apenas as linhas puras, ignorando o "0,0" da página do Illustrator
+    global_bbox = extents(gravacao_entities + corte_entities)
+    
     width_cm, height_cm = 0.0, 0.0
+    
     if global_bbox.has_data:
         width_cm = (global_bbox.extmax.x - global_bbox.extmin.x) / 10.0
         height_cm = (global_bbox.extmax.y - global_bbox.extmin.y) / 10.0
